@@ -15,13 +15,20 @@ enum LoadStatus {
   completed, //加载完成
 }
 
+enum LoadDirection {
+  up,
+  down,
+}
+
 ///加载更多 Widget
 class LoadAny extends StatefulWidget {
   ///加载状态
-  final LoadStatus status;
+  final LoadStatus statusDown;
+  final LoadStatus statusUp;
 
   ///加载更多回调
-  final LoadMoreCallback onLoadMore;
+  final LoadMoreCallback onLoadDown;
+  final LoadMoreCallback onLoadUp;
 
   ///自定义加载更多 Widget
   final LoadMoreBuilder loadMoreBuilder;
@@ -30,23 +37,30 @@ class LoadAny extends StatefulWidget {
   final CustomScrollView child;
 
   ///到底部才触发加载更多
-  final bool endLoadMore;
+  final bool endLoadDown;
+  final bool endLoadUp;
 
   ///加载更多底部触发距离
   final double bottomTriggerDistance;
+  final double topTriggerDistance;
 
   ///底部 loadmore 高度
   final double footerHeight;
 
   ///Footer key
   final Key _keyLastItem = Key("__LAST_ITEM");
+  final Key _keyFirstItem = Key("__FIRST_ITEM");
 
   LoadAny({
-    @required this.status,
+    @required this.statusDown,
     @required this.child,
-    @required this.onLoadMore,
-    this.endLoadMore = true,
+    @required this.onLoadDown,
+    @required this.statusUp,
+    this.onLoadUp,
+    this.endLoadDown = true,
+    this.endLoadUp = true,
     this.bottomTriggerDistance = 200,
+    this.topTriggerDistance = 200,
     this.footerHeight = 40,
     this.loadMoreBuilder,
   });
@@ -60,32 +74,36 @@ class _LoadAnyState extends State<LoadAny> {
   Widget build(BuildContext context) {
     ///添加 Footer Sliver
     dynamic check =
-        widget.child.slivers.elementAt(widget.child.slivers.length - 1);
+    widget.child.slivers.elementAt(widget.child.slivers.length - 1);
 
     ///判断是否已存在 Footer
     if (check is SliverSafeArea && check.key == widget._keyLastItem) {
       widget.child.slivers.removeLast();
     }
 
-    widget.child.slivers.add(
-      SliverSafeArea(
-        key: widget._keyLastItem,
-        top: false,
-        left: false,
-        right: false,
-        sliver: SliverToBoxAdapter(
-          child: _buildLoadMore(widget.status),
-        ),
-      ),
-    );
+    widget.child.slivers.insert(0, loadWidget(widget.statusUp, LoadDirection.up));
+    widget.child.slivers.add(loadWidget(widget.statusDown, LoadDirection.down));
+
     return NotificationListener<ScrollNotification>(
       onNotification: _handleNotification,
       child: widget.child,
     );
   }
 
+  Widget loadWidget(LoadStatus status, LoadDirection direction) {
+    return SliverSafeArea(
+      key: direction == LoadDirection.down?widget._keyLastItem: widget._keyFirstItem,
+      top: false,
+      left: false,
+      right: false,
+      sliver: SliverToBoxAdapter(
+        child: _buildLoadDown(status),
+      ),
+    );
+  }
+
   ///构建加载更多 Widget
-  Widget _buildLoadMore(LoadStatus status) {
+  Widget _buildLoadDown(LoadStatus status) {
     ///检查返回自定义状态
     if (widget.loadMoreBuilder != null) {
       Widget loadMoreBuilder = widget.loadMoreBuilder(context, status);
@@ -121,7 +139,7 @@ class _LoadAnyState extends State<LoadAny> {
           ),
           SizedBox(width: 10),
           Text(
-            '加载中...',
+            'Загрузка...',
             style: TextStyle(
               fontSize: 12,
               color: Colors.grey,
@@ -138,8 +156,8 @@ class _LoadAnyState extends State<LoadAny> {
       behavior: HitTestBehavior.translucent,
       onTap: () {
         //点击重试加载更多
-        if (widget.onLoadMore != null) {
-          widget.onLoadMore();
+        if (widget.onLoadDown != null) {
+          widget.onLoadDown();
         }
       },
       child: Container(
@@ -155,7 +173,7 @@ class _LoadAnyState extends State<LoadAny> {
             ),
             SizedBox(width: 10),
             Text(
-              '加载失败，点击重试',
+              'Ошибка загрузки',
               style: TextStyle(
                 fontSize: 12,
                 color: Colors.grey,
@@ -183,7 +201,7 @@ class _LoadAnyState extends State<LoadAny> {
           ),
           SizedBox(width: 6),
           Text(
-            '没有更多了',
+            'На этом всё',
             style: TextStyle(
               fontSize: 12,
               color: Colors.grey,
@@ -207,26 +225,38 @@ class _LoadAnyState extends State<LoadAny> {
     double currentExtent = notification.metrics.pixels;
     //最大滚动距离
     double maxExtent = notification.metrics.maxScrollExtent;
+
+    double minExtent = notification.metrics.minScrollExtent;
+
     //滚动更新过程中，并且设置非滚动到底部可以触发加载更多
-    if ((notification is ScrollUpdateNotification) && !widget.endLoadMore) {
-      return _checkLoadMore(
-          (maxExtent - currentExtent <= widget.bottomTriggerDistance));
+    if ((notification is ScrollUpdateNotification) && (!widget.endLoadDown || !widget.endLoadUp)) {
+      bool down = (maxExtent - currentExtent <= widget.bottomTriggerDistance);
+      bool up = (currentExtent <= widget.topTriggerDistance);
+      return _checkLoadMore(down, up);
     }
 
     //滚动到底部，并且设置滚动到底部才触发加载更多
-    if ((notification is ScrollEndNotification) && widget.endLoadMore) {
+    if ((notification is ScrollEndNotification) && widget.endLoadDown) {
       //滚动到底部并且加载状态为正常时，调用加载更多
-      return _checkLoadMore((currentExtent >= maxExtent));
+      bool down = (currentExtent >= maxExtent);
+      bool up = currentExtent <= minExtent;
+      return _checkLoadMore(down, up);
     }
 
     return false;
   }
 
   ///处理加载更多
-  bool _checkLoadMore(bool canLoad) {
-    if (canLoad && widget.status == LoadStatus.normal) {
-      if (widget.onLoadMore != null) {
-        widget.onLoadMore();
+  bool _checkLoadMore(bool canLoadDown, bool canLoadUp) {
+    if (canLoadDown && widget.statusDown == LoadStatus.normal) {
+      if (widget.onLoadDown != null) {
+        widget.onLoadDown();
+        return true;
+      }
+    }
+    else if (canLoadUp && widget.statusUp == LoadStatus.normal) {
+      if (widget.onLoadUp != null) {
+        widget.onLoadUp();
         return true;
       }
     }
